@@ -78,12 +78,22 @@ rm -f build/serial.log
 # to the code. Vendor first, system second, and say which one won.
 OVMF_CODE=""
 OVMF_VARS=""
-for d in "$ROOT/vendor/firmware" /usr/share/OVMF; do
-    [ -n "$OVMF_CODE" ] || { [ -f "$d/OVMF_CODE.fd" ] && OVMF_CODE="$d/OVMF_CODE.fd"; }
-    [ -n "$OVMF_VARS" ] || { [ -f "$d/OVMF_VARS.fd" ] && OVMF_VARS="$d/OVMF_VARS.fd"; }
+# Several names per directory, not one. Ubuntu 24.04 ships only the 4M
+# variants (OVMF_CODE_4M.fd / OVMF_VARS_4M.fd); looking solely for the
+# plain name fails there even though the firmware is installed. Trying
+# each known name works on both.
+for d in "$ROOT/vendor/firmware" /usr/share/OVMF /usr/share/edk2/ovmf; do
+    for n in OVMF_CODE_4M.fd OVMF_CODE.fd; do
+        [ -n "$OVMF_CODE" ] || { [ -f "$d/$n" ] && OVMF_CODE="$d/$n"; }
+    done
+    for n in OVMF_VARS_4M.fd OVMF_VARS.fd; do
+        [ -n "$OVMF_VARS" ] || { [ -f "$d/$n" ] && OVMF_VARS="$d/$n"; }
+    done
 done
 if [ -z "$OVMF_CODE" ] || [ -z "$OVMF_VARS" ]; then
-    echo "no OVMF firmware found (looked in vendor/firmware and /usr/share/OVMF)"
+    echo "no OVMF firmware found (looked in vendor/firmware, /usr/share/OVMF,"
+    echo "/usr/share/edk2/ovmf). Install the ovmf package, or put the .fd"
+    echo "files in vendor/firmware."
     exit 1
 fi
 echo "--- firmware: $OVMF_CODE"

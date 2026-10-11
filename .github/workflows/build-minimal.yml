@@ -70,9 +70,39 @@ jobs:
     - name: Boot it in QEMU
       run: |
         sudo apt-get install -y -qq ovmf
-        cp /usr/share/OVMF/OVMF_VARS.fd build/OVMF_VARS.fd
+
+        # Resolve the firmware names instead of assuming them.
+        #
+        # Ubuntu 24.04 runners ship only the 4M variants
+        # (OVMF_CODE_4M.fd / OVMF_VARS_4M.fd). Hard-coding the plain
+        # OVMF_VARS.fd failed there with "cp: cannot stat ... No such file
+        # or directory" -- the file is present, just under the newer name.
+        # Trying each known name in turn works on 22.04 and 24.04 alike,
+        # and fails loudly with what was actually found if none match.
+        OVMF_CODE=""
+        OVMF_VARS=""
+        for cand in \
+          /usr/share/OVMF/OVMF_CODE_4M.fd \
+          /usr/share/OVMF/OVMF_CODE.fd \
+          /usr/share/edk2/ovmf/OVMF_CODE.fd; do
+            [ -f "$cand" ] && { OVMF_CODE="$cand"; break; }
+        done
+        for cand in \
+          /usr/share/OVMF/OVMF_VARS_4M.fd \
+          /usr/share/OVMF/OVMF_VARS.fd \
+          /usr/share/edk2/ovmf/OVMF_VARS.fd; do
+            [ -f "$cand" ] && { OVMF_VARS="$cand"; break; }
+        done
+        [ -n "$OVMF_CODE" ] || { echo "no OVMF code firmware:"; ls -l /usr/share/OVMF/ || true; exit 1; }
+        [ -n "$OVMF_VARS" ] || { echo "no OVMF vars firmware:"; ls -l /usr/share/OVMF/ || true; exit 1; }
+        echo "code: $OVMF_CODE"
+        echo "vars: $OVMF_VARS"
+
+        # VARS is copied per run: firmware writes to it, and two VMs
+        # sharing one copy corrupt each other.
+        cp "$OVMF_VARS" build/OVMF_VARS.fd
         qemu-system-x86_64 -machine q35 -m 1024 \
-          -drive if=pflash,format=raw,unit=0,readonly=on,file=/usr/share/OVMF/OVMF_CODE.fd,file.locking=off \
+          -drive if=pflash,format=raw,unit=0,readonly=on,file="$OVMF_CODE",file.locking=off \
           -drive if=pflash,format=raw,unit=1,file=build/OVMF_VARS.fd,file.locking=off \
           -drive format=raw,file=build/nxsol-minimal.img,file.locking=off \
           -display none -serial file:build/serial.log -no-reboot &
