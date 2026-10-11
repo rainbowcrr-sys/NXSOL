@@ -1,0 +1,77 @@
+# NX Vault source -- /user/interface/window
+#
+# Human-readable SOURCE only. At boot just the compiled .nxv is read;
+# editing this file does nothing until `nxvault compile` runs.
+#
+# Scope: user tier. Writable by the owning account, no elevation.
+
+[window.mode]
+# Which window mode new windows open in.
+#   normal                 windowed, with a frame
+#   borderless             windowed, no frame
+#   fullscreen             forced fullscreen, frame drawn
+#   fs-borderless          forced fullscreen, no frame
+#   fs-borderless-locked   forced fullscreen, no frame, cannot be dragged
+#
+# The three axes behind the enum -- fullscreen, decorated, draggable -- are
+# collapsed into one value because the combinations that make no sense
+# (fullscreen plus a resizable border) are not worth representing.
+default = "normal"
+
+# Whether an application is allowed to request a forced mode against the
+# user's `default`. Off means the user's choice always wins.
+allow_force_modes = true
+
+# Key chord that leaves fs-borderless-locked, since that mode draws no
+# buttons. Leaving it by accident is the thing the mode exists to prevent.
+locked_exit_chord = "Ctrl+Alt+Esc"
+
+[window.controls]
+# Traffic-light display logic.
+#   macos     active window shows full-colour dots at all times
+#   minimal   active window shows grey dots; colour only while hovering
+#   hybrid    active window shows DESATURATED colour dots; full colour once
+#             the pointer enters the title bar; icon on the button itself
+#
+# Default is hybrid: colour is always faintly present so you can tell there
+# are buttons and which is which, but it never competes with the window's
+# own content.
+style = "hybrid"
+
+# Buttons sit top-right in the order minimise, maximise, close -- matching
+# Windows on purpose, because a migration cost of zero is worth more than
+# being different for its own sake.
+position = "top-right"
+
+# Saturation of the idle dots. 0.0 looks like `minimal`, 1.0 like `macos`.
+idle_saturation = 0.35
+hover_saturation = 1.0
+
+# Unfocused windows back off to grey and fade.
+inactive_opacity = 0.4
+
+# Diameters in pixels.
+dot_idle_px = 8
+dot_hover_px = 10
+dot_focus_px = 14
+
+# Animation lengths.
+anim_enter_ms = 150
+anim_leave_ms = 200
+anim_click_ms = 80
+
+[window.root]
+# Privileged windows keep their buttons fully coloured and never let them
+# shrink to the idle size. Closing a root window should never be something
+# you do by accident.
+always_colored = true
+
+[window.controls.range]
+idle_saturation = [0.0, 1.0]
+hover_saturation = [0.0, 1.0]
+inactive_opacity = [0.0, 1.0]
+dot_idle_px = [4, 32]
+dot_hover_px = [4, 32]
+dot_focus_px = [4, 32]
+anim_enter_ms = [0, 1000]
+anim_leave_ms = [0, 1000]

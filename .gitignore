@@ -1,0 +1,21 @@
+# 只给我自己看的东西，不进仓库
+我自己的使用与编译手册.md
+*私人*
+*.private.md
+
+# 构建产物
+build/
+disk/*.img
+downloads/
+*.o
+*.efi
+*.ttf
+*.so
+
+# 固件（体积大且非源码）
+firmware/*.fd
+tools/windows/bin/
+tools/windows/downloads/
+tools/windows/environment/
+*.exe
+*.part

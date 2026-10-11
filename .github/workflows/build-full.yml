@@ -1,0 +1,133 @@
+# SPDX-License-Identifier: GPL-2.0-only
+#
+# Builds the FULL image: a bootable disk image containing the whole system.
+#
+# Manual, because a full build runs debootstrap and takes a long time --
+# running it on every push would burn the minutes and slow the answer to the
+# only question that needs answering quickly (that is build-minimal.yml).
+#
+# Triggered either by the button on the Actions page or by pushing a tag.
+# Pushing a tag additionally creates a Release, so the result is kept.
+
+name: full
+
+on:
+  workflow_dispatch:
+    inputs:
+      kernel:
+        description: 'Kernel version from the Ubuntu mainline PPA (e.g. 6.6). Empty = base kernel.'
+        required: false
+        default: ''
+      version:
+        description: 'Version label for the build. Empty = date-based.'
+        required: false
+        default: ''
+  push:
+    tags: [ 'v*' ]
+
+jobs:
+  full:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Build NX parts
+      run: |
+        sudo apt-get update -qq
+        sudo apt-get install -y -qq clang lld
+        mkdir -p build
+        clang -target x86_64-unknown-windows \
+          -ffreestanding -fno-stack-protector -fshort-wchar -mno-red-zone \
+          -Iboot/include -O2 -Wall -Wextra \
+          -c boot/nxboot.c -o build/nxboot.o
+        lld-link /subsystem:efi_application /entry:efi_main \
+          /out:build/nxboot.efi build/nxboot.o
+        gcc -std=c17 -Wall -Wextra -O2 -static -o build/nxvaultd vault/nxvaultd.c
+        gcc -std=c17 -Wall -Wextra -O2 -static -o build/nxinit \
+            init/nxinit.c vault/libnxvault.c
+        gcc -std=c17 -Wall -Wextra -Werror -O2 -fPIC -shared \
+            -DNXICONS_MODULE=0 -Iicons/src \
+            -o build/libnxicons-core.so icons/src/nxicons.c icons/src/glyphs.c
+        gcc -std=c17 -Wall -Wextra -Werror -O2 -fPIC -shared \
+            -DNXICONS_MODULE=1 -Iicons/src \
+            -o build/libnxicons-system.so icons/src/nxicons.c icons/src/glyphs.c
+        python3 tools/mkinitramfs.py
+
+    - name: Build root filesystem
+      run: |
+        VERSION="${{ github.event.inputs.version }}"
+        [ -z "$VERSION" ] && VERSION="$(cat VERSION)"
+        sudo KERNEL_VER="${{ github.event.inputs.kernel }}" \
+             BUILD="$PWD/build" \
+             bash tools/mkrootfs.sh
+
+    - name: Compress to squashfs
+      run: |
+        VERSION="${{ github.event.inputs.version }}"
+        [ -z "$VERSION" ] && VERSION="$(cat VERSION)"
+        echo "VERSION=$VERSION" >> $GITHUB_ENV
+        sudo mksquashfs build/rootfs build/nxsystem.squashfs \
+             -comp xz -noappend -processors 4
+        ls -lh build/nxsystem.squashfs
+
+    - name: Split into volumes and hash
+      run: |
+        python3 tools/mkvolume.py \
+          --input build/nxsystem.squashfs \
+          --output-dir build/dist \
+          --version "$VERSION"
+        cat build/dist/manifest.json
+
+    - name: Assemble full disk image
+      run: |
+        # Boot code plus the system image on one FAT volume: enough for QEMU
+        # and for writing straight to a disk.
+        python3 tools/mkdisk.py --out build/nxsol-full.img --size-mb 4096 \
+          --efi build/nxboot.efi \
+          --kernel vendor/kernel/vmlinuz \
+          --initrd build/nxinitrd.img
+
+    - name: Sanity check the image
+      run: |
+        ls -lh build/nxsol-full.img build/dist/
+        python3 - <<'PY'
+        import json, os, hashlib
+        m = json.load(open('build/dist/manifest.json'))
+        joined = b''
+        for v in m['volumes']:
+            p = os.path.join('build/dist', v['name'])
+            assert os.path.getsize(p) == v['size'], v['name'] + ' wrong size'
+            h = hashlib.sha256(open(p,'rb').read()).hexdigest()
+            assert h == v['sha256'], v['name'] + ' hash mismatch'
+            joined += open(p,'rb').read()
+        assert hashlib.sha256(joined).hexdigest() == m['whole']['sha256']
+        print('all %d volumes verify, reassembled hash matches' % len(m['volumes']))
+        PY
+
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: nxsol-full-${{ env.VERSION }}
+        path: |
+          build/nxsol-full.img
+          build/dist/*.part*
+          build/dist/manifest.json
+          build/libnxicons-core.so
+          build/libnxicons-system.so
+        retention-days: 90
+
+    - name: Release (only when a tag was pushed)
+      if: startsWith(github.ref, 'refs/tags/v')
+      uses: softprops/action-gh-release@v2
+      with:
+        files: |
+          build/dist/*.part*
+          build/dist/manifest.json
+        body: |
+          NX System ${{ env.VERSION }}
+
+          Volumes and manifest. Reassemble with:
+              cat nxsystem.squashfs.part* > nxsystem.squashfs
+              sha256sum nxsystem.squashfs    # must match manifest.json

@@ -1,0 +1,124 @@
+# SPDX-License-Identifier: GPL-2.0-only
+#
+# Builds the two installable ISOs.
+#
+#   netinstall   boot code + the downloader. A few tens of megabytes. The
+#                system image is fetched during installation.
+#   offline      the same, plus the system image. Self-contained; the size
+#                of the image plus boot code.
+#
+# Both boot the same way and run the same installer -- the installer looks
+# for the image beside itself and falls back to the network, so one layout
+# serves both.
+#
+# Manual, or on a tag (which also creates a Release).
+
+name: iso
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version label. Empty = date-based.'
+        required: false
+        default: ''
+      include_offline:
+        description: 'Build the offline ISO too (needs the system image built first).'
+        required: false
+        default: 'true'
+  push:
+    tags: [ 'v*' ]
+
+jobs:
+  iso:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Install tools
+      run: |
+        sudo apt-get update -qq
+        sudo apt-get install -y -qq clang lld xorriso squashfs-tools isolinux
+
+    - name: Build boot code
+      run: |
+        mkdir -p build
+        clang -target x86_64-unknown-windows \
+          -ffreestanding -fno-stack-protector -fshort-wchar -mno-red-zone \
+          -Iboot/include -O2 -Wall -Wextra \
+          -c boot/nxboot.c -o build/nxboot.o
+        lld-link /subsystem:efi_application /entry:efi_main \
+          /out:build/nxboot.efi build/nxboot.o
+        gcc -std=c17 -Wall -Wextra -O2 -static -o build/nxvaultd vault/nxvaultd.c
+        gcc -std=c17 -Wall -Wextra -O2 -static -o build/nxinit \
+            init/nxinit.c vault/libnxvault.c
+        python3 tools/mkinitramfs.py
+
+    - name: Version
+      run: |
+        VERSION="${{ github.event.inputs.version }}"
+        [ -z "$VERSION" ] && VERSION="$(cat VERSION)"
+        echo "VERSION=$VERSION" >> $GITHUB_ENV
+        echo "building $VERSION"
+
+    - name: Netinstall ISO
+      run: |
+        python3 tools/mkiso.py \
+          --output build/nxsol-${{ env.VERSION }}-netinstall.iso \
+          --efi build/nxboot.efi \
+          --kernel vendor/kernel/vmlinuz \
+          --initrd build/nxinitrd.img
+
+    - name: Build system image (for the offline ISO)
+      if: github.event.inputs.include_offline != 'false' || startsWith(github.ref, 'refs/tags/v')
+      run: |
+        sudo KERNEL_VER="" BUILD="$PWD/build" bash tools/mkrootfs.sh
+        sudo mksquashfs build/rootfs build/nxsystem.squashfs \
+             -comp xz -noappend -processors 4
+        python3 tools/mkvolume.py \
+          --input build/nxsystem.squashfs \
+          --output-dir build/dist \
+          --version "${{ env.VERSION }}"
+
+    - name: Offline ISO
+      if: github.event.inputs.include_offline != 'false' || startsWith(github.ref, 'refs/tags/v')
+      run: |
+        python3 tools/mkiso.py \
+          --output build/nxsol-${{ env.VERSION }}.iso \
+          --efi build/nxboot.efi \
+          --kernel vendor/kernel/vmlinuz \
+          --initrd build/nxinitrd.img \
+          --system-image build/dist/nxsystem.squashfs.part* \
+          --manifest build/dist/manifest.json
+
+    - name: Report
+      run: |
+        ls -lh build/*.iso
+        echo
+        for f in build/*.iso; do
+          echo "--- $f"
+          xorriso -indev "$f" -find / -type f 2>/dev/null | head -10
+        done
+
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: nxsol-iso-${{ env.VERSION }}
+        path: build/*.iso
+        retention-days: 90
+
+    - name: Release (only when a tag was pushed)
+      if: startsWith(github.ref, 'refs/tags/v')
+      uses: softprops/action-gh-release@v2
+      with:
+        files: |
+          build/*.iso
+          build/dist/manifest.json
+        body: |
+          NX System ${{ env.VERSION }}
+
+          - `nxsol-${{ env.VERSION }}.iso`              offline installer
+          - `nxsol-${{ env.VERSION }}-netinstall.iso`    small installer, fetches the image
+          - `manifest.json`                              sizes and hashes

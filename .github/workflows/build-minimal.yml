@@ -1,0 +1,102 @@
+# SPDX-License-Identifier: GPL-2.0-only
+#
+# Builds the MINIMAL image: bootloader + kernel + initramfs, nothing else.
+#
+# Runs on every push. It exists to answer one question quickly --
+# "does the boot chain still work?" -- so it builds only what is needed to
+# answer that, and it boots the result in QEMU before reporting success.
+#
+# It does not produce anything a user would install. That is build-full.yml
+# and build-iso.yml, both manual.
+
+name: minimal
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  minimal:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Install build tools
+      run: |
+        sudo apt-get update -qq
+        sudo apt-get install -y -qq clang lld qemu-system-x86 python3
+
+    - name: Build NX Boot Manager
+      run: |
+        mkdir -p build
+        clang -target x86_64-unknown-windows \
+          -ffreestanding -fno-stack-protector -fshort-wchar -mno-red-zone \
+          -Iboot/include -O2 -Wall -Wextra \
+          -c boot/nxboot.c -o build/nxboot.o
+        lld-link /subsystem:efi_application /entry:efi_main \
+          /out:build/nxboot.efi build/nxboot.o
+
+    - name: Build userland
+      run: |
+        gcc -std=c17 -Wall -Wextra -O2 -static -o build/nxvaultd vault/nxvaultd.c
+        gcc -std=c17 -Wall -Wextra -O2 -static -o build/nxinit \
+            init/nxinit.c vault/libnxvault.c
+
+    - name: Build NXIcons shared objects
+      run: |
+        gcc -std=c17 -Wall -Wextra -Werror -O2 -fPIC -shared \
+            -DNXICONS_MODULE=0 -Iicons/src \
+            -o build/libnxicons-core.so icons/src/nxicons.c icons/src/glyphs.c
+        gcc -std=c17 -Wall -Wextra -Werror -O2 -fPIC -shared \
+            -DNXICONS_MODULE=1 -Iicons/src \
+            -o build/libnxicons-system.so icons/src/nxicons.c icons/src/glyphs.c
+        ls -l build/*.so
+
+    - name: Build initramfs
+      run: python3 tools/mkinitramfs.py
+
+    - name: Build minimal disk image
+      run: |
+        python3 tools/mkdisk.py --out build/nxsol-minimal.img --size-mb 48 \
+          --efi build/nxboot.efi \
+          --kernel vendor/kernel/vmlinuz \
+          --initrd build/nxinitrd.img
+
+    - name: Boot it in QEMU
+      run: |
+        sudo apt-get install -y -qq ovmf
+        cp /usr/share/OVMF/OVMF_VARS.fd build/OVMF_VARS.fd
+        qemu-system-x86_64 -machine q35 -m 1024 \
+          -drive if=pflash,format=raw,unit=0,readonly=on,file=/usr/share/OVMF/OVMF_CODE.fd,file.locking=off \
+          -drive if=pflash,format=raw,unit=1,file=build/OVMF_VARS.fd,file.locking=off \
+          -drive format=raw,file=build/nxsol-minimal.img,file.locking=off \
+          -display none -serial file:build/serial.log -no-reboot &
+        sleep 75
+        pkill -f qemu-system-x86_64 || true
+        echo "---- serial ----"
+        tr -d '\r' < build/serial.log | grep -aE \
+          "Hello NXSOL|NX Vault|nxinit|Linux [0-9]" | head -20
+
+    - name: Assert the boot chain reached milestone 2
+      run: |
+        tr -d '\r' < build/serial.log > build/serial.clean
+        grep -q "Hello NXSOL"   build/serial.clean || { echo "kernel never ran /init"; exit 1; }
+        grep -q "nxvaultd"      build/serial.clean || { echo "Vault daemon did not start"; exit 1; }
+        grep -q "boot target is immutable" build/serial.clean || { echo "Vault immutability not asserted"; exit 1; }
+        echo "boot chain OK"
+
+    - name: Upload
+      uses: actions/upload-artifact@v4
+      with:
+        name: nxsol-minimal-${{ github.sha }}
+        path: |
+          build/nxsol-minimal.img
+          build/libnxicons-core.so
+          build/libnxicons-system.so
+          build/serial.clean
+        retention-days: 30

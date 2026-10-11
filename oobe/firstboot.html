@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<!--
+  NX System -- first-boot greeting animation
+  Copyright (C) 2026 rainbowcrr-sys -- GPL-2.0-only
+
+  Shown exactly once: after OOBE completes and the account has been created,
+  before the desktop appears. A marker file is written when it finishes, so
+  it never plays again.
+
+  Ten greetings cycle. The language chosen during installation is moved to
+  the front of the list; the rest keep their fixed order.
+
+  Exit:
+    - drag upward past the threshold with the left button held
+    - two-finger scroll up on a touchpad
+    - the animation finishing all ten on its own
+  Whichever happens first ends it, then "Welcome Use NX System!" holds for
+  about two seconds and the desktop fades in.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>NX</title>
+<style>
+  :root {
+    --nx-fg:      #E8EAED;
+    --nx-dim:     #7A8088;
+    --nx-bg:      #0A0B0D;
+    --nx-accent:  #88CCFF;
+    --fade-in:    650ms;
+    --hold:       900ms;
+    --fade-out:   450ms;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  html, body {
+    width: 100%; height: 100%;
+    background: var(--nx-bg);
+    overflow: hidden;
+    font-family: "NXSans", "Noto Sans", system-ui, sans-serif;
+    -webkit-user-select: none; user-select: none;
+    cursor: default;
+  }
+
+  /* The breathing wash behind everything, same motion language as OOBE. */
+  #breath {
+    position: absolute; inset: 0;
+    background: radial-gradient(circle at 50% 46%, #16283A 0%, #0A0B0D 68%);
+    animation: breathe 7s ease-in-out infinite;
+  }
+  @keyframes breathe {
+    0%, 100% { opacity: .45; }
+    50%      { opacity: .95; }
+  }
+
+  /* One greeting at a time, centred. */
+  #stage {
+    position: absolute; inset: 0;
+    display: flex; align-items: center; justify-content: center;
+  }
+
+  #word {
+    font-size: clamp(48px, 9vw, 128px);
+    font-weight: 300;
+    letter-spacing: .01em;
+    color: var(--nx-fg);
+    opacity: 0;
+    transform: translateY(var(--dragY, 0px)) scale(var(--dragScale, 1));
+    will-change: opacity, transform;
+  }
+
+  /* Phases are driven by a class, so the timings live in one place. */
+  #word.in  { animation: wordIn  var(--fade-in) ease-out forwards; }
+  #word.out { animation: wordOut var(--fade-out) ease-in forwards; }
+
+  @keyframes wordIn  { from { opacity: 0; transform: translateY(14px) scale(.985); }
+                         to { opacity: 1; transform: translateY(0)    scale(1); } }
+  @keyframes wordOut { from { opacity: 1; } to { opacity: 0; } }
+
+  /* The final line, held rather than cycled. */
+  #welcome {
+    position: absolute; inset: 0;
+    display: flex; align-items: center; justify-content: center;
+    font-size: clamp(30px, 5vw, 68px);
+    font-weight: 300;
+    color: var(--nx-fg);
+    opacity: 0;
+    pointer-events: none;
+  }
+  #welcome.show { animation: wordIn var(--fade-in) ease-out forwards; }
+
+  /* Bottom hint: an arrow-in-circle glyph plus a label that also cycles. */
+  #hint {
+    position: absolute;
+    left: 0; right: 0;
+    bottom: clamp(48px, 9vh, 96px);
+    display: flex; flex-direction: column; align-items: center; gap: 12px;
+    color: var(--nx-dim);
+    font-size: 14px;
+    letter-spacing: .04em;
+    transition: opacity 400ms ease;
+  }
+  #hint.gone { opacity: 0; }
+
+  #arrow {
+    font-family: "NXSpinner", "NXSans", sans-serif;
+    font-size: 22px;
+    line-height: 1;
+    color: var(--nx-dim);
+    animation: nudge 2.4s ease-in-out infinite;
+  }
+  @keyframes nudge {
+    0%, 62%, 100% { transform: translateY(0);    opacity: .55; }
+    78%           { transform: translateY(-7px); opacity: 1; }
+  }
+
+  /* While dragging, the greeting follows the pointer and thins out. */
+  body.dragging #word { transition: none; }
+</style>
+</head>
+<body>
+
+<div id="breath"></div>
+
+<div id="stage"><div id="word"></div></div>
+<div id="welcome">Welcome Use NX&nbsp;System!</div>
+
+<div id="hint">
+  <div id="arrow">&#8679;</div>
+  <div id="hintText"></div>
+</div>
+
+<script>
+/*
+ * The host (NXDisplay) injects two things before this page runs:
+ *   window.__nxLang   -- BCP-47 tag chosen at install time, e.g. "zh-CN"
+ *   window.__nxDone() -- called once, when the animation is over
+ * If the host is absent (i.e. you opened this file in a browser to preview
+ * it) both fall back to harmless defaults so the page still animates.
+ */
+(function () {
+  "use strict";
+
+  // ---- greetings ---------------------------------------------------------
+  // Fixed cycle order. The installed language is hoisted to the front.
+  var GREETINGS = [
+    { tag: "en",    word: "hello",        hint: "swipe up to continue" },
+    { tag: "zh-CN", word: "你好",         hint: "向上滑动以继续" },
+    { tag: "zh-TW", word: "你好",         hint: "向上滑動以繼續" },
+    { tag: "ja",    word: "こんにちは",   hint: "上にスワイプして続ける" },
+    { tag: "ru",    word: "привет",       hint: "смахните вверх, чтобы продолжить" },
+    { tag: "ko",    word: "안녕",         hint: "위로 스와이프하여 계속" },
+    { tag: "ar",    word: "مرحبا",        hint: "اسحب للأعلى للمتابعة" },
+    { tag: "fr",    word: "bonjour",      hint: "glissez vers le haut pour continuer" },
+    { tag: "es",    word: "hola",         hint: "desliza hacia arriba para continuar" },
+    { tag: "de",    word: "hallo",        hint: "nach oben wischen zum Fortfahren" }
+  ];
+
+  var chosen = (typeof window.__nxLang === "string") ? window.__nxLang : null;
+  if (chosen) {
+    // Move the matching greeting to index 0, preserving the rest of the order.
+    for (var i = 0; i < GREETINGS.length; i++) {
+      if (GREETINGS[i].tag.toLowerCase() === chosen.toLowerCase()) {
+        var pick = GREETINGS.splice(i, 1)[0];
+        GREETINGS.unshift(pick);
+        break;
+      }
+    }
+  }
+
+  var FADE_IN = 650, HOLD = 900, FADE_OUT = 450;
+  var WELCOME_HOLD = 2000;
+  var DRAG_THRESHOLD = 100;      // px of upward travel that ends it
+
+  var elWord  = document.getElementById("word");
+  var elHint  = document.getElementById("hintText");
+  var elWhole = document.getElementById("hint");
+  var elWelc  = document.getElementById("welcome");
+
+  var idx = 0;
+  var finished = false;
+  var timers = [];
+
+  function schedule(fn, ms) { var t = setTimeout(fn, ms); timers.push(t); return t; }
+  function clearAll() { timers.forEach(clearTimeout); timers = []; }
+
+  function finish() {
+    if (finished) return;
+    finished = true;
+    clearAll();
+    elWhole.classList.add("gone");
+    showWelcome();
+  }
+
+  function showWelcome() {
+    elWord.style.opacity = "0";
+    elWelc.classList.add("show");
+    schedule(function () {
+      if (typeof window.__nxDone === "function") window.__nxDone();
+      else document.body.style.opacity = "0";   // preview-only fade
+    }, WELCOME_HOLD);
+  }
+
+  function cycle() {
+    if (finished) return;
+
+    var g = GREETINGS[idx % GREETINGS.length];
+    elWord.textContent = g.word;
+    elHint.textContent = g.hint;
+    elWord.classList.remove("out");
+    elWord.classList.add("in");
+
+    schedule(function () {
+      if (finished) return;
+      elWord.classList.remove("in");
+      elWord.classList.add("out");
+      schedule(function () {
+        idx += 1;
+        // One full pass through every language, then stop and welcome.
+        if (idx >= GREETINGS.length) finish();
+        else cycle();
+      }, FADE_OUT);
+    }, FADE_IN + HOLD);
+  }
+
+  // ---- upward drag / wheel / key ----------------------------------------
+  var startY = null, dragging = false;
+
+  function dragProgress(dy) {
+    // dy is negative when moving up.
+    var up = Math.max(0, -dy);
+    var p  = Math.min(1, up / DRAG_THRESHOLD);
+    elWord.style.setProperty("--dragY", (-up * 0.55) + "px");
+    elWord.style.setProperty("--dragScale", (1 - p * 0.06).toFixed(4));
+    elWord.style.opacity = String(1 - p);
+    return p >= 1;
+  }
+
+  window.addEventListener("pointerdown", function (e) {
+    if (e.button !== 0) return;
+    dragging = true; startY = e.clientY;
+    document.body.classList.add("dragging");
+  });
+
+  window.addEventListener("pointermove", function (e) {
+    if (!dragging || startY === null) return;
+    if (dragProgress(e.clientY - startY)) {
+      dragging = false;
+      document.body.classList.remove("dragging");
+      finish();
+    }
+  });
+
+  window.addEventListener("pointerup", function () {
+    if (!dragging) return;
+    dragging = false; startY = null;
+    document.body.classList.remove("dragging");
+    // Did not reach the threshold: spring back.
+    elWord.style.transition = "opacity 320ms ease, transform 420ms cubic-bezier(.22,1,.36,1)";
+    elWord.style.setProperty("--dragY", "0px");
+    elWord.style.setProperty("--dragScale", "1");
+    elWord.style.opacity = "1";
+  });
+
+  window.addEventListener("wheel", function (e) {
+    if (e.deltaY < -30) finish();     // two-finger scroll up
+  }, { passive: true });
+
+  window.addEventListener("keydown", function () { finish(); });
+
+  // ---- go ----------------------------------------------------------------
+  schedule(cycle, 350);
+})();
+</script>
+</body>
+</html>
