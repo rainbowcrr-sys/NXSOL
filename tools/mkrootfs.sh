@@ -51,8 +51,16 @@ rm -rf "$TARGET"
 mkdir -p "$TARGET"
 
 info "debootstrap $SUITE base"
+# No space anywhere inside --include. A trailing ", locales" here splits
+# into a second shell word, "locales" becomes a fourth positional argument,
+# and debootstrap reads it as SCRIPT and dies with the very unhelpful
+# "E: No such script: <mirror>". One character, whole build down.
+# --components is needed because busybox lives in universe, not main.
+# minbase defaults to main only, and debootstrap then dies with
+# "Couldn't find these debs: busybox" -- it does not fall back.
 debootstrap --variant=minbase --arch=amd64 \
-    --include=busybox,ca-certificates,curl, locales \
+    --components=main,universe \
+    --include=busybox,ca-certificates,curl,locales \
     "$SUITE" "$TARGET" "$MIRROR"
 
 # A minbase has no /proc etc. yet, and several things below want them.
