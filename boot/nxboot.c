@@ -257,6 +257,68 @@ static CHAR16 *to_utf16(const char *ascii, UINTN *chars_out)
     return buf;
 }
 
+/*
+ * Try every filesystem firmware has, in order, until the file is found.
+ *
+ * Needed because on install media the boot application and the kernel live
+ * on different volumes: the application in a small FAT EFI boot image, the
+ * kernel in the ISO9660 tree. Firmware will not load an EFI boot image
+ * large enough to carry both -- a 20 MiB one is refused outright, a 3 MiB
+ * one works -- so the kernel has to be looked for rather than assumed to be
+ * next to us.
+ */
+static void *read_file_any(const CHAR16 *path, UINTN *size_out)
+{
+    EFI_HANDLE *handles = NULL;
+    UINTN count = 0;
+    UINTN i;
+    void *data = NULL;
+
+    EFI_STATUS s = g_bs->LocateHandleBuffer(ByProtocol, &g_sfs_guid, NULL,
+                                            &count, &handles);
+    if (EFI_ERROR(s) || !handles) return NULL;
+
+    {
+        char d[48];
+        UINTN v = count;
+        int n = 0, j;
+        const char *dig = "0123456789";
+        char t[24];
+        while (v > 0) { t[n++] = dig[v % 10]; v /= 10; }
+        j = 0;
+        d[j++] = ' '; d[j++] = ' ';
+        for (n = n - 1; n >= 0; n--) d[j++] = t[n];
+        d[j++] = ' ';
+        {
+            const char *w = "filesystems to search";
+            int k = 0;
+            while (w[k]) d[j++] = w[k++];
+        }
+        d[j] = 0;
+        print(d);
+    }
+
+    for (i = 0; i < count; i++) {
+        EFI_SIMPLE_FILE_SYSTEM_PROTOCOL *v = NULL;
+        EFI_FILE_PROTOCOL *r = NULL;
+
+        if (EFI_ERROR(g_bs->HandleProtocol(handles[i], &g_sfs_guid,
+                                           (void **)&v)) || !v)
+            continue;
+        if (EFI_ERROR(v->OpenVolume(v, &r)) || !r)
+            continue;
+
+        data = read_file(r, path, size_out);
+        r->Close(r);
+
+        if (data && *size_out) break;
+        if (data) { g_bs->FreePool(data); data = NULL; }
+    }
+
+    g_bs->FreePool(handles);
+    return data;
+}
+
 /* ------------------------------------------------------------------ main */
 
 EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st)
@@ -299,10 +361,26 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st)
 
     print("  loading kernel ...");
     kernel = read_file(root, NX_KERNEL_PATH, &kernel_size);
+
+    /*
+     * On an ISO the boot application runs out of a small FAT image and the
+     * kernel sits in the ISO9660 tree beside it -- firmware refuses to load
+     * an EFI boot image big enough to hold both, so they cannot be in the
+     * same place. Fall back to every other filesystem firmware knows about
+     * before giving up.
+     */
+    if (!kernel || !kernel_size) {
+        print("  not on this volume -- searching others");
+        kernel = read_file_any(NX_KERNEL_PATH, &kernel_size);
+    }
     if (!kernel || !kernel_size) { print("  kernel not found"); goto fail; }
 
     print("  loading initramfs ...");
     g_initrd_data = read_file(root, NX_INITRD_PATH, &g_initrd_size);
+    if (!g_initrd_data || !g_initrd_size) {
+        print("  not on this volume -- searching others");
+        g_initrd_data = read_file_any(NX_INITRD_PATH, &g_initrd_size);
+    }
     if (!g_initrd_data || !g_initrd_size) { print("  initrd not found"); goto fail; }
 
     print("  publishing initrd ...");

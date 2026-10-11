@@ -361,18 +361,27 @@ def main():
     ap.add_argument("--efi", default="build/nxboot.efi")
     ap.add_argument("--kernel", default="/boot/vmlinuz")
     ap.add_argument("--initrd", default="build/nxinitrd.img")
+    ap.add_argument("--system-image", nargs="*", default=[],
+                    help="extra files to place under /nx/images "
+                         "(system squashfs volumes, manifest)")
     a = ap.parse_args()
 
     for p in (a.efi, a.kernel, a.initrd):
         if not os.path.exists(p):
             sys.exit("missing: %s" % p)
 
-    os.makedirs(os.path.dirname(a.out) or ".", exist_ok=True)
-    build([
+    files = [
         ("EFI/BOOT/BOOTX64.EFI", a.efi),
         ("vmlinuz", a.kernel),
         ("initrd.img", a.initrd),
-    ], a.out, a.size_mb)
+    ]
+    for p in a.system_image:
+        if not os.path.exists(p):
+            sys.exit("missing: %s" % p)
+        files.append(("nx/images/" + os.path.basename(p), p))
+
+    os.makedirs(os.path.dirname(a.out) or ".", exist_ok=True)
+    build(files, a.out, a.size_mb)
 
 
 if __name__ == "__main__":

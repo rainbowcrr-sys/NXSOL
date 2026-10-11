@@ -128,6 +128,13 @@ typedef enum {
     EfiPalCode, EfiPersistentMemory, EfiMaxMemoryType
 } EFI_MEMORY_TYPE;
 
+/* EFI_LOCATE_SEARCH_TYPE for LocateHandleBuffer(). */
+typedef enum {
+    AllHandles,
+    ByRegisterNotify,
+    ByProtocol
+} EFI_LOCATE_SEARCH_TYPE;
+
 typedef struct {
     uint32_t Type;
     EFI_PHYSICAL_ADDRESS PhysicalStart;
@@ -192,7 +199,8 @@ typedef struct {
     void *CloseProtocol;
     void *OpenProtocolInformation;
     void *ProtocolsPerHandle;
-    void *LocateHandleBuffer;
+    EFI_STATUS (EFIAPI *LocateHandleBuffer)(EFI_LOCATE_SEARCH_TYPE, EFI_GUID *,
+                                           void *, UINTN *, EFI_HANDLE **);
     EFI_LOCATE_PROTOCOL LocateProtocol;
     void *InstallMultipleProtocolInterfaces;
     void *UninstallMultipleProtocolInterfaces;

@@ -40,7 +40,11 @@ jobs:
     - name: Install tools
       run: |
         sudo apt-get update -qq
-        sudo apt-get install -y -qq clang lld xorriso squashfs-tools isolinux
+        # dosfstools and mtools are for mkiso.py: the EFI boot image is a
+        # FAT volume built with mkfs.vfat and populated with mmd/mcopy.
+        # Without them the ISO step fails with "mkfs.vfat failed".
+        sudo apt-get install -y -qq clang lld xorriso squashfs-tools \
+             isolinux dosfstools mtools
 
     - name: Build boot code
       run: |
